@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-800 antialiased font-sans overflow-x-hidden;
+    scrollbar-gutter: stable;
+    overscroll-behavior-x: none;
+  }
+}
+
+@layer components {
+  .custom-scrollbar::-webkit-scrollbar {
+    @apply w-1.5;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-slate-200 rounded-full transition-colors;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-300;
+  }
+
+  .glass-card {
+    @apply bg-white/70 backdrop-blur-xl border border-white/30;
+  }
+
+  .bento-card {
+    @apply bg-white rounded-[2rem] shadow-premium border border-slate-100 transition-all duration-300;
+  }
+  .bento-card:hover {
+    @apply -translate-y-1 shadow-lg border-brand-100;
+  }
+
+  .input-standard {
+    @apply w-full p-3 bg-slate-50 border-none rounded-2xl text-base transition-all focus:bg-white focus:ring-4 focus:ring-brand-500/10 focus:shadow-sm;
+  }
+  
+  .btn-primary {
+    @apply bg-brand-500 text-white font-bold py-3 px-6 rounded-2xl shadow-lg shadow-brand-500/20 hover:bg-brand-600 transition-all active:scale-95 flex items-center justify-center gap-2;
+  }
+}
+
+/* Animations */
+.fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

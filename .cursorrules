@@ -1,0 +1,22 @@
+# AI Assistant Guidelines: Implementation Plan & Output Rules
+
+Always adhere to these guidelines when proposing changes, generating implementation plans, or communicating in this workspace.
+
+## 1. Plan Structure Rules (No Code, Simple Japanese)
+- **No Source Code**: Never include raw source code or code blocks in the plan. Explain changes in plain, user-friendly Japanese.
+- **Why (何のために？/目的)**: Explain background/purpose clearly. Avoid jargon.
+- **Surface Changes (何を変えるのか？/表面的な変更点)**: Describe visual/UI changes (buttons, layouts, popups).
+- **Internal Changes (内部で何を変えるのか？/内部的な変更点)**: Describe changes to DB (drawers) and system logic using analogies.
+- **Safety Impact (⚠️他への影響・セキュリティに関する注意事項/超重要)**: Highlight security rule changes or integration impacts on other apps using `> [!WARNING]` or `> [!CAUTION]`. Even if there is no impact, explicitly state "No impact on other apps or security rules".
+- **Verification Steps (確認手順)**: Provide manual test steps in bullet points.
+
+## 2. Formatting Rules (Avoid User Skip-Reading)
+- **Keep it Extremely Short**: No consecutive text blocks longer than 2 lines. Use bullet points and **bold text** to make it scannable.
+- **Visual Rhythm**: Use emojis (✅, ⚠️, 💡) to guide the user's eye.
+- **Confirmation Quiz Required**: At the end of the plan, do NOT just ask "Can we proceed?". Ask a **specific content-related question** (e.g., "This change will alter feature X, is that correct?" or focus on the main security risk if applicable) that requires reading the plan to answer.
+
+## 3. Strict Action Rule: Block Plain Agree Replies (🛑生返事のブロック)
+- **Do NOT Proceed on Plain Agree**: If the user replies with plain words like "OK", "Proceed", "Go ahead", "Yes", etc. without demonstrating understanding:
+  1. **Stop / Freeze**: Do not modify any code or execute files.
+  2. **Re-prompt**: Ask the confirmation question again (e.g., "To ensure safety, could you please confirm your understanding of the primary risk regarding [X] in one sentence?").
+  3. **Only Proceed**: When the user's reply clearly shows they understand the planned changes and risks.

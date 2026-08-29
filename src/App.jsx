@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { 
   collection, doc, setDoc, updateDoc, deleteDoc, deleteField,
-  onSnapshot, query, orderBy, serverTimestamp, limit 
+  onSnapshot, query, orderBy, serverTimestamp, limit, getDocs 
 } from 'firebase/firestore';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx } from 'clsx';
@@ -821,22 +821,72 @@ function App() {
   // =====================
   // Full Data Export & Restore (JSON / CSV)
   // =====================
-  const handleExportJSON = () => {
-    if (children.length === 0) {
-      alert("出力対象のデータがありません。");
-      return;
+  // =====================
+  // Full Data Export & Restore (All Collections: children, daily_reports, offices, logs, staff)
+  // =====================
+  const [isExporting, setIsExporting] = useState(false);
+
+  const fetchCollectionDocs = async (collectionName, maxLimit = null) => {
+    try {
+      let q = collection(db, collectionName);
+      if (maxLimit) {
+        q = query(q, limit(maxLimit));
+      }
+      const snap = await getDocs(q);
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch (e) {
+      console.warn(`Could not fetch collection ${collectionName}:`, e);
+      return [];
     }
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(children, null, 2));
-    const now = new Date();
-    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `kokyaku_backup_${timestamp}.json`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
-    showToast(`${children.length} 件の全データをJSON（完全バックアップ）として出力しました`);
-    setExportModalOpen(false);
+  };
+
+  const handleExportJSON = async () => {
+    setIsExporting(true);
+    try {
+      // 児童データに加えて、他アプリのコレクションも全件取得
+      const officesData = await fetchCollectionDocs("offices");
+      const dailyReportsData = await fetchCollectionDocs("daily_reports");
+      const logsData = await fetchCollectionDocs("logs", 500);
+      const staffData = await fetchCollectionDocs("staff");
+
+      const backupPayload = {
+        backupVersion: "2.0",
+        exportedAt: new Date().toISOString(),
+        appName: "Kids Manager / Customer Management",
+        summary: {
+          childrenCount: children.length,
+          officesCount: officesData.length,
+          dailyReportsCount: dailyReportsData.length,
+          logsCount: logsData.length,
+          staffCount: staffData.length
+        },
+        collections: {
+          children: children,
+          offices: officesData,
+          daily_reports: dailyReportsData,
+          logs: logsData,
+          staff: staffData
+        }
+      };
+
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupPayload, null, 2));
+      const now = new Date();
+      const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `system_full_backup_${timestamp}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+
+      showToast(`全コレクション（児童, 日報, 事業所, ログ等）を含む完全バックアップを出力しました`);
+      setExportModalOpen(false);
+    } catch (err) {
+      console.error("Export error:", err);
+      alert(`エクスポートに失敗しました: ${err.message}`);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const handleExportCSV = () => {
@@ -889,7 +939,7 @@ function App() {
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
-    showToast(`${children.length} 件の全データをCSV（Excel用）として出力しました`);
+    showToast(`${children.length} 件の児童データをCSV（Excel用）として出力しました`);
     setExportModalOpen(false);
   };
 
@@ -902,15 +952,36 @@ function App() {
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target.result);
-        if (!Array.isArray(parsed)) {
-          alert('正しいJSONバックアップファイルではありません（児童データの配列形式である必要があります）。');
+        
+        let payloadToRestore = {};
+        let counts = {};
+
+        if (parsed.collections) {
+          // v2.0 全コレクションバックアップ形式
+          payloadToRestore = parsed.collections;
+          counts = {
+            children: (parsed.collections.children || []).length,
+            offices: (parsed.collections.offices || []).length,
+            daily_reports: (parsed.collections.daily_reports || []).length,
+            logs: (parsed.collections.logs || []).length,
+            staff: (parsed.collections.staff || []).length
+          };
+        } else if (Array.isArray(parsed)) {
+          // v1.0 児童のみ配列形式（後方互換）
+          payloadToRestore = { children: parsed };
+          counts = { children: parsed.length };
+        } else {
+          alert('正しいバックアップファイル形式ではありません。');
           return;
         }
-        if (parsed.length === 0) {
-          alert('ファイル内に児童データが見つかりませんでした。');
+
+        const totalItems = Object.values(counts).reduce((a, b) => a + b, 0);
+        if (totalItems === 0) {
+          alert('ファイル内に復元可能なデータが見つかりませんでした。');
           return;
         }
-        setJsonRestoreData(parsed);
+
+        setJsonRestoreData({ payload: payloadToRestore, counts });
         setJsonRestoreModalOpen(true);
       } catch (err) {
         alert(`JSON解析エラー: ファイルの形式が正しくありません。\n詳細: ${err.message}`);
@@ -920,32 +991,37 @@ function App() {
   };
 
   const executeJsonRestore = async () => {
-    if (!jsonRestoreData || jsonRestoreData.length === 0) return;
+    if (!jsonRestoreData || !jsonRestoreData.payload) return;
     setIsRestoring(true);
 
-    let successCount = 0;
-    let failCount = 0;
+    let totalSuccess = 0;
+    let totalFail = 0;
+    const { payload } = jsonRestoreData;
 
-    for (const item of jsonRestoreData) {
-      const childId = item.id || `child_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-      const { id, ...dataToSave } = item;
-      try {
-        await setDoc(doc(db, "children", childId), {
-          ...dataToSave,
-          updatedAt: serverTimestamp()
-        }, { merge: true });
-        successCount++;
-      } catch (err) {
-        console.error(`Restore failed for ${childId}:`, err);
-        failCount++;
+    for (const [collectionName, items] of Object.entries(payload)) {
+      if (!Array.isArray(items)) continue;
+
+      for (const item of items) {
+        const docId = item.id || `doc_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        const { id, ...dataToSave } = item;
+        try {
+          await setDoc(doc(db, collectionName, docId), {
+            ...dataToSave,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+          totalSuccess++;
+        } catch (err) {
+          console.error(`Restore failed for ${collectionName}/${docId}:`, err);
+          totalFail++;
+        }
       }
     }
 
-    await writeLog("バックアップ復元", `JSONファイルから全データを復元・登録しました（成功: ${successCount}件, 失敗: ${failCount}件）`);
+    await writeLog("完全バックアップ復元", `全コレクション一括復元を実行しました（成功: ${totalSuccess}件, 失敗: ${totalFail}件）`);
     setIsRestoring(false);
     setJsonRestoreModalOpen(false);
     setJsonRestoreData([]);
-    showToast(`${successCount} 件のデータを正常に復元・取り込みました`);
+    showToast(`合計 ${totalSuccess} 件のデータを正常に復元・取り込みました`);
   };
 
   // =====================
@@ -1915,22 +1991,23 @@ function App() {
               </div>
 
               <p className="text-xs text-slate-500 mb-6 leading-relaxed">
-                出力したいファイル形式を選択してください。バックアップ・システム復元にはJSON形式、Excelでの一覧確認にはCSV形式が適しています。
+                出力したいファイル形式を選択してください。<strong>「システム完全バックアップ」</strong>では、児童データに加えて日報（daily_reports）や事業所、操作履歴などすべてのデータをパックして出力します。
               </p>
 
               <div className="space-y-3">
                 <button
+                  disabled={isExporting}
                   onClick={handleExportJSON}
-                  className="w-full p-4 bg-slate-50 hover:bg-brand-50 border border-slate-200 hover:border-brand-300 rounded-2xl flex items-center justify-between group transition-all"
+                  className="w-full p-4 bg-slate-50 hover:bg-brand-50 border border-slate-200 hover:border-brand-300 rounded-2xl flex items-center justify-between group transition-all disabled:opacity-50"
                 >
                   <div className="text-left">
                     <div className="text-sm font-black text-slate-800 group-hover:text-brand-600 flex items-center gap-2">
-                      <span>完全バックアップ用 (JSON)</span>
+                      <span>システム完全バックアップ (JSON)</span>
                       <span className="text-[10px] bg-brand-500 text-white px-2 py-0.5 rounded-full font-bold">推奨</span>
                     </div>
-                    <p className="text-[11px] text-slate-400 mt-0.5">家族構成やメモを含む全データを欠落なく保存</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">児童、日報、事業所、操作履歴など全コレクションを完全保存</p>
                   </div>
-                  <Download className="w-5 h-5 text-slate-400 group-hover:text-brand-500 transition-colors" />
+                  {isExporting ? <Loader2 className="w-5 h-5 text-brand-500 animate-spin" /> : <Download className="w-5 h-5 text-slate-400 group-hover:text-brand-500 transition-colors" />}
                 </button>
 
                 <button
@@ -1939,7 +2016,7 @@ function App() {
                 >
                   <div className="text-left">
                     <div className="text-sm font-black text-slate-800 group-hover:text-emerald-600 flex items-center gap-2">
-                      <span>Excel確認・一覧用 (CSV)</span>
+                      <span>児童一覧のみ (CSV)</span>
                     </div>
                     <p className="text-[11px] text-slate-400 mt-0.5">Excelやスプレッドシートで直接開ける表形式データ</p>
                   </div>
@@ -1953,7 +2030,7 @@ function App() {
 
       {/* JSON Restore Confirmation Modal */}
       <AnimatePresence>
-        {jsonRestoreModalOpen && (
+        {jsonRestoreModalOpen && jsonRestoreData && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => !isRestoring && setJsonRestoreModalOpen(false)}
@@ -1972,29 +2049,37 @@ function App() {
                 </div>
                 <div>
                   <h2 className="text-xl font-black text-slate-800">バックアップデータの復元</h2>
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">読み込み件数: {jsonRestoreData.length} 件</p>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                    合計 {Object.values(jsonRestoreData.counts || {}).reduce((a, b) => a + b, 0)} 件のデータ
+                  </p>
                 </div>
               </div>
 
               <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200/60 mb-6 flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
                 <p className="text-xs text-amber-800 font-bold leading-relaxed">
-                  JSONファイル内の {jsonRestoreData.length} 件の児童データをデータベースに復元（追加・上書き）します。同じIDの児童は最新の内容に更新されます。
+                  ファイル内の全データをデータベースへ復元（追加・上書き）します。同じIDのデータは最新の内容に更新されます。
                 </p>
               </div>
 
-              <div className="max-h-48 overflow-y-auto custom-scrollbar bg-slate-50 rounded-2xl p-3 mb-6 divide-y divide-slate-100">
-                {jsonRestoreData.slice(0, 10).map((child, idx) => (
-                  <div key={idx} className="py-2 flex items-center justify-between text-xs font-bold text-slate-700">
-                    <span>{child.lastName ? `${child.lastName} ${child.firstName}` : child.name || '未設定'}</span>
-                    <span className="text-[10px] text-slate-400">{child.schoolName || ''} {child.schoolGrade || ''}</span>
-                  </div>
-                ))}
-                {jsonRestoreData.length > 10 && (
-                  <div className="py-2 text-center text-[10px] text-slate-400 font-bold">
-                    他 {jsonRestoreData.length - 10} 件...
-                  </div>
-                )}
+              {/* Collection breakdown list */}
+              <div className="grid grid-cols-2 gap-2 mb-6">
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400">児童データ</div>
+                  <div className="text-lg font-black text-slate-800">{jsonRestoreData.counts?.children || 0} <span className="text-xs font-normal">件</span></div>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400">日報・連絡帳</div>
+                  <div className="text-lg font-black text-slate-800">{jsonRestoreData.counts?.daily_reports || 0} <span className="text-xs font-normal">件</span></div>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400">事業所</div>
+                  <div className="text-lg font-black text-slate-800">{jsonRestoreData.counts?.offices || 0} <span className="text-xs font-normal">件</span></div>
+                </div>
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="text-[10px] font-bold text-slate-400">操作履歴</div>
+                  <div className="text-lg font-black text-slate-800">{jsonRestoreData.counts?.logs || 0} <span className="text-xs font-normal">件</span></div>
+                </div>
               </div>
 
               <div className="flex gap-3">
@@ -2015,7 +2100,7 @@ function App() {
                   {isRestoring ? (
                     <><Loader2 className="w-4 h-4 animate-spin" /> 復元処理中...</>
                   ) : (
-                    `データを復元する (${jsonRestoreData.length}件)`
+                    `全データを復元する (${Object.values(jsonRestoreData.counts || {}).reduce((a, b) => a + b, 0)}件)`
                   )}
                 </button>
               </div>

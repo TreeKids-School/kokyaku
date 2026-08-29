@@ -5,7 +5,8 @@ import {
   Sparkles, Users, Target, StickyNote, Smartphone,
   School, Calendar, Trash2, X, ChevronRight, Loader2,
   Tag, ArrowUpAZ, ArrowDownAZ, CheckSquare, Square, Check, AlertCircle,
-  Archive, ArchiveRestore, Trash2 as Trash, Menu
+  Archive, ArchiveRestore, Trash2 as Trash, Menu,
+  Download, Upload, RefreshCw
 } from 'lucide-react';
 import { 
   collection, doc, setDoc, updateDoc, deleteDoc, deleteField,
@@ -138,6 +139,13 @@ function App() {
   const [formData, setFormData] = useState({});
   const fileInputRef = useRef(null);
   const officeInputRef = useRef(null);
+  const jsonFileInputRef = useRef(null);
+
+  // 全データエクスポート・復元用のステート
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [jsonRestoreModalOpen, setJsonRestoreModalOpen] = useState(false);
+  const [jsonRestoreData, setJsonRestoreData] = useState([]);
+  const [isRestoring, setIsRestoring] = useState(false);
 
   // Sort & Filter state
   const [sortOrder, setSortOrder] = useState('asc');
@@ -811,6 +819,136 @@ function App() {
   };
 
   // =====================
+  // Full Data Export & Restore (JSON / CSV)
+  // =====================
+  const handleExportJSON = () => {
+    if (children.length === 0) {
+      alert("出力対象のデータがありません。");
+      return;
+    }
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(children, null, 2));
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `kokyaku_backup_${timestamp}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+    showToast(`${children.length} 件の全データをJSON（完全バックアップ）として出力しました`);
+    setExportModalOpen(false);
+  };
+
+  const handleExportCSV = () => {
+    if (children.length === 0) {
+      alert("出力対象のデータがありません。");
+      return;
+    }
+    const flattened = children.map(c => ({
+      'ID': c.id || '',
+      '姓': c.lastName || '',
+      '名': c.firstName || '',
+      'せい(ふりがな)': c.lastNameFurigana || '',
+      'めい(ふりがな)': c.firstNameFurigana || '',
+      '氏名(結合)': c.name || `${c.lastName || ''} ${c.firstName || ''}`.trim(),
+      'ふりがな(結合)': c.nameFurigana || `${c.lastNameFurigana || ''} ${c.firstNameFurigana || ''}`.trim(),
+      '在籍校・園': c.schoolName || '',
+      '学年': c.schoolGrade || '',
+      '生年月日': c.birthDate || '',
+      '性別': c.gender === 'male' ? '男性' : c.gender === 'female' ? '女性' : c.gender === 'other' ? 'その他' : '',
+      '現住所': c.address || '',
+      'その他の連絡先': c.otherContacts || '',
+      '連絡先1(続柄)': c.contact1Relation || '',
+      '連絡先1(電話)': c.contact1Phone || '',
+      '連絡先1(勤務先)': c.workplace1Name || '',
+      '連絡先1(職場電話)': c.workplace1Contact || '',
+      '連絡先2(続柄)': c.contact2Relation || '',
+      '連絡先2(電話)': c.contact2Phone || '',
+      '連絡先2(勤務先)': c.workplace2Name || '',
+      '連絡先2(職場電話)': c.workplace2Contact || '',
+      '事業所': Array.isArray(c.offices) ? c.offices.join(', ') : Array.isArray(c.tags) ? c.tags.join(', ') : '',
+      '障がい名': c.disabilityName || '',
+      '手帳種類': c.certificateType || '',
+      '級・度': c.certificateGrade || '',
+      '本人の性格': c.personality || '',
+      '望む事': c.desiredSupport || '',
+      'アレルギー': c.allergies || '',
+      'アレルギー詳細': c.allergiesDetail || '',
+      '特記事項メモ': c.memo || '',
+      '家族構成': (c.familyMembers || []).map(f => `${f.name || ''}(${f.age || ''}歳, 続柄/連絡先:${f.contact || ''})`).join('; '),
+      'アーカイブ': c.archived ? 'はい' : 'いいえ'
+    }));
+    const csv = Papa.unparse(flattened);
+    const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute("href", url);
+    downloadAnchor.setAttribute("download", `kokyaku_data_${timestamp}.csv`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+    showToast(`${children.length} 件の全データをCSV（Excel用）として出力しました`);
+    setExportModalOpen(false);
+  };
+
+  const handleJsonFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (jsonFileInputRef.current) jsonFileInputRef.current.value = '';
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target.result);
+        if (!Array.isArray(parsed)) {
+          alert('正しいJSONバックアップファイルではありません（児童データの配列形式である必要があります）。');
+          return;
+        }
+        if (parsed.length === 0) {
+          alert('ファイル内に児童データが見つかりませんでした。');
+          return;
+        }
+        setJsonRestoreData(parsed);
+        setJsonRestoreModalOpen(true);
+      } catch (err) {
+        alert(`JSON解析エラー: ファイルの形式が正しくありません。\n詳細: ${err.message}`);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const executeJsonRestore = async () => {
+    if (!jsonRestoreData || jsonRestoreData.length === 0) return;
+    setIsRestoring(true);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const item of jsonRestoreData) {
+      const childId = item.id || `child_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+      const { id, ...dataToSave } = item;
+      try {
+        await setDoc(doc(db, "children", childId), {
+          ...dataToSave,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+        successCount++;
+      } catch (err) {
+        console.error(`Restore failed for ${childId}:`, err);
+        failCount++;
+      }
+    }
+
+    await writeLog("バックアップ復元", `JSONファイルから全データを復元・登録しました（成功: ${successCount}件, 失敗: ${failCount}件）`);
+    setIsRestoring(false);
+    setJsonRestoreModalOpen(false);
+    setJsonRestoreData([]);
+    showToast(`${successCount} 件のデータを正常に復元・取り込みました`);
+  };
+
+  // =====================
   // Delete / Archive
   // =====================
   const handleDeleteChild = async (id) => {
@@ -956,19 +1094,46 @@ function App() {
             新規児童を登録
           </button>
 
+          <div className="grid grid-cols-2 gap-2">
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full bg-white border border-slate-200 text-slate-700 py-2.5 rounded-2xl font-bold text-xs flex items-center justify-center gap-1.5 hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
+              title="CSVファイルから児童データを読み込みます"
+            >
+              <Upload className="w-3.5 h-3.5 text-slate-500" />
+              CSV取込
+            </button>
+            <button 
+              onClick={() => jsonFileInputRef.current?.click()}
+              className="w-full bg-white border border-slate-200 text-slate-700 py-2.5 rounded-2xl font-bold text-xs flex items-center justify-center gap-1.5 hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
+              title="バックアップJSONからデータを完全復元します"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-brand-500" />
+              JSON復元
+            </button>
+          </div>
+
           <button 
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full bg-white border border-slate-200 text-slate-600 py-3 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-slate-50 transition-all hover:scale-[1.02] active:scale-95 shadow-sm"
+            onClick={() => setExportModalOpen(true)}
+            className="w-full bg-slate-50 border border-slate-200 text-slate-700 py-2.5 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 hover:bg-slate-100 transition-all active:scale-95 shadow-sm"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            CSVインポート
+            <Download className="w-4 h-4 text-brand-500" />
+            全データを出力 (JSON / CSV)
           </button>
+
           <input 
             type="file" 
             accept=".csv" 
             ref={fileInputRef}
             style={{ display: 'none' }}
             onChange={handleFileUpload}
+          />
+          <input 
+            type="file" 
+            accept=".json" 
+            ref={jsonFileInputRef}
+            style={{ display: 'none' }}
+            onChange={handleJsonFileUpload}
           />
 
           <div className="flex items-center gap-2">
@@ -1723,6 +1888,139 @@ function App() {
             <div className="w-5 h-5 bg-brand-500 rounded-full flex items-center justify-center text-[10px] text-white">✓</div>
             {toast}
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Export Options Modal */}
+      <AnimatePresence>
+        {exportModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setExportModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-md" />
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8 border border-white z-10"
+            >
+              <button onClick={() => setExportModalOpen(false)} className="absolute top-5 right-5 p-2 hover:bg-slate-100 rounded-full transition-colors">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-12 bg-brand-50 text-brand-500 rounded-2xl flex items-center justify-center">
+                  <Download className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-black text-slate-800">全データのエクスポート</h2>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">対象: 全 {children.length} 名のデータ</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-500 mb-6 leading-relaxed">
+                出力したいファイル形式を選択してください。バックアップ・システム復元にはJSON形式、Excelでの一覧確認にはCSV形式が適しています。
+              </p>
+
+              <div className="space-y-3">
+                <button
+                  onClick={handleExportJSON}
+                  className="w-full p-4 bg-slate-50 hover:bg-brand-50 border border-slate-200 hover:border-brand-300 rounded-2xl flex items-center justify-between group transition-all"
+                >
+                  <div className="text-left">
+                    <div className="text-sm font-black text-slate-800 group-hover:text-brand-600 flex items-center gap-2">
+                      <span>完全バックアップ用 (JSON)</span>
+                      <span className="text-[10px] bg-brand-500 text-white px-2 py-0.5 rounded-full font-bold">推奨</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">家族構成やメモを含む全データを欠落なく保存</p>
+                  </div>
+                  <Download className="w-5 h-5 text-slate-400 group-hover:text-brand-500 transition-colors" />
+                </button>
+
+                <button
+                  onClick={handleExportCSV}
+                  className="w-full p-4 bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 rounded-2xl flex items-center justify-between group transition-all"
+                >
+                  <div className="text-left">
+                    <div className="text-sm font-black text-slate-800 group-hover:text-emerald-600 flex items-center gap-2">
+                      <span>Excel確認・一覧用 (CSV)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Excelやスプレッドシートで直接開ける表形式データ</p>
+                  </div>
+                  <Download className="w-5 h-5 text-slate-400 group-hover:text-emerald-500 transition-colors" />
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* JSON Restore Confirmation Modal */}
+      <AnimatePresence>
+        {jsonRestoreModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => !isRestoring && setJsonRestoreModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-md" />
+            <motion.div initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl p-8 border border-white z-10"
+            >
+              {!isRestoring && (
+                <button onClick={() => setJsonRestoreModalOpen(false)} className="absolute top-5 right-5 p-2 hover:bg-slate-100 rounded-full transition-colors">
+                  <X className="w-5 h-5 text-slate-400" />
+                </button>
+              )}
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-12 bg-amber-50 text-amber-500 rounded-2xl flex items-center justify-center">
+                  <RefreshCw className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-black text-slate-800">バックアップデータの復元</h2>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">読み込み件数: {jsonRestoreData.length} 件</p>
+                </div>
+              </div>
+
+              <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200/60 mb-6 flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-800 font-bold leading-relaxed">
+                  JSONファイル内の {jsonRestoreData.length} 件の児童データをデータベースに復元（追加・上書き）します。同じIDの児童は最新の内容に更新されます。
+                </p>
+              </div>
+
+              <div className="max-h-48 overflow-y-auto custom-scrollbar bg-slate-50 rounded-2xl p-3 mb-6 divide-y divide-slate-100">
+                {jsonRestoreData.slice(0, 10).map((child, idx) => (
+                  <div key={idx} className="py-2 flex items-center justify-between text-xs font-bold text-slate-700">
+                    <span>{child.lastName ? `${child.lastName} ${child.firstName}` : child.name || '未設定'}</span>
+                    <span className="text-[10px] text-slate-400">{child.schoolName || ''} {child.schoolGrade || ''}</span>
+                  </div>
+                ))}
+                {jsonRestoreData.length > 10 && (
+                  <div className="py-2 text-center text-[10px] text-slate-400 font-bold">
+                    他 {jsonRestoreData.length - 10} 件...
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  disabled={isRestoring}
+                  onClick={() => setJsonRestoreModalOpen(false)}
+                  className="flex-1 py-3.5 font-bold text-slate-400 hover:text-slate-600 transition-colors text-xs"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  disabled={isRestoring}
+                  onClick={executeJsonRestore}
+                  className="flex-[2] bg-brand-500 hover:bg-brand-600 text-white font-black py-3.5 rounded-2xl shadow-lg shadow-brand-500/20 transition-all active:scale-95 text-xs flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isRestoring ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> 復元処理中...</>
+                  ) : (
+                    `データを復元する (${jsonRestoreData.length}件)`
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 

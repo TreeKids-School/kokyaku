@@ -116,6 +116,25 @@ const calculateAgeAndGrade = (birthDateStr) => {
   return { age, grade };
 };
 
+const calculateServiceType = (birthDateStr, schoolGrade = '') => {
+  if (schoolGrade) {
+    if (schoolGrade.includes('小') || schoolGrade.includes('中') || schoolGrade.includes('高') || schoolGrade.includes('一般')) {
+      return '放課後等デイサービス';
+    }
+    if (schoolGrade.includes('年少') || schoolGrade.includes('年中') || schoolGrade.includes('年長') || schoolGrade.includes('未就学') || schoolGrade.includes('未誕')) {
+      return '児童発達支援';
+    }
+  }
+  const { grade } = calculateAgeAndGrade(birthDateStr);
+  if (grade) {
+    if (grade.includes('小') || grade.includes('中') || grade.includes('高') || grade.includes('一般')) {
+      return '放課後等デイサービス';
+    }
+    return '児童発達支援';
+  }
+  return '放課後等デイサービス';
+};
+
 // Helper for tailwind class merging
 function cn(...inputs) {
   return twMerge(clsx(inputs));
@@ -297,50 +316,65 @@ function App() {
         const unsubscribeDb = onSnapshot(q, (snapshot) => {
           const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           
-          // データ移行ロジック: lastName がないドキュメントを検出し、name を分割して保存
+          // データ移行・互換性修復ロジック
           data.forEach(async (child) => {
+            const updates = {};
+
+            // 1. 姓・名の分割修復
             if (child.name && !child.lastName) {
-              const nameParts = child.name.split(/[\s　]+/); // 半角・全角スペースで分割
-              const lastName = nameParts[0] || '';
-              const firstName = nameParts.slice(1).join(' ') || '';
-              try {
-                await updateDoc(doc(db, "children", child.id), {
-                  lastName,
-                  firstName,
-                  updatedAt: serverTimestamp()
-                });
-                console.log(`Migrated child: ${child.name} -> ${lastName} ${firstName}`);
-              } catch (e) {
-                console.error(`Migration failed for ${child.id}:`, e);
-              }
+              const nameParts = child.name.split(/[\s　]+/);
+              updates.lastName = nameParts[0] || '';
+              updates.firstName = nameParts.slice(1).join(' ') || '';
             }
-            // 事業所(tags->offices)移行ロジック
-            if (child.tags && child.offices === undefined) {
-              try {
-                await updateDoc(doc(db, "children", child.id), {
-                  offices: child.tags,
-                  tags: deleteField(),
-                  updatedAt: serverTimestamp()
-                });
-                console.log(`Migrated tags to offices for: ${child.name || child.lastName}`);
-              } catch (e) {
-                console.error(`Tags migration failed for ${child.id}:`, e);
-              }
-            }
-            // ふりがな移行ロジック: lastNameFurigana がないドキュメントを検出し、nameFurigana を分割して保存
+
+            // 2. ふりがなの分割修復
             if (child.nameFurigana && !child.lastNameFurigana) {
               const furiganaParts = child.nameFurigana.split(/[\s　]+/);
-              const lastNameFurigana = furiganaParts[0] || '';
-              const firstNameFurigana = furiganaParts.slice(1).join(' ') || '';
+              updates.lastNameFurigana = furiganaParts[0] || '';
+              updates.firstNameFurigana = furiganaParts.slice(1).join(' ') || '';
+            }
+
+            // 3. 他アプリ向けフルネーム（name, fullName）の自動生成
+            const lastName = updates.lastName !== undefined ? updates.lastName : (child.lastName || '');
+            const firstName = updates.firstName !== undefined ? updates.firstName : (child.firstName || '');
+            const currentFullName = `${lastName} ${firstName}`.trim();
+
+            if (currentFullName && (!child.name || !child.fullName)) {
+              updates.name = currentFullName;
+              updates.fullName = currentFullName;
+            }
+
+            // 4. 他アプリ向けふりがな（nameFurigana, nameKana）の自動生成
+            const lastNameFurigana = updates.lastNameFurigana !== undefined ? updates.lastNameFurigana : (child.lastNameFurigana || '');
+            const firstNameFurigana = updates.firstNameFurigana !== undefined ? updates.firstNameFurigana : (child.firstNameFurigana || '');
+            const currentFullFurigana = `${lastNameFurigana} ${firstNameFurigana}`.trim();
+
+            if (currentFullFurigana && (!child.nameFurigana || !child.nameKana)) {
+              updates.nameFurigana = currentFullFurigana;
+              updates.nameKana = currentFullFurigana;
+            }
+
+            // 5. サービス区分（放課後等デイサービス / 児童発達支援）の自動判定・付与
+            if (!child.serviceType || child.isHoukagoDay === undefined) {
+              const sType = calculateServiceType(child.birthDate, child.schoolGrade || child.schoolName);
+              updates.serviceType = sType;
+              updates.serviceCategory = sType;
+              updates.isHoukagoDay = sType === '放課後等デイサービス';
+            }
+
+            // 6. 事業所(tags->offices)移行
+            if (child.tags && child.offices === undefined) {
+              updates.offices = child.tags;
+              updates.tags = deleteField();
+            }
+
+            if (Object.keys(updates).length > 0) {
               try {
-                await updateDoc(doc(db, "children", child.id), {
-                  lastNameFurigana,
-                  firstNameFurigana,
-                  updatedAt: serverTimestamp()
-                });
-                console.log(`Migrated furigana: ${child.nameFurigana} -> ${lastNameFurigana} ${firstNameFurigana}`);
+                updates.updatedAt = serverTimestamp();
+                await updateDoc(doc(db, "children", child.id), updates);
+                console.log(`Auto-repaired compatibility for child: ${child.id}`, updates);
               } catch (e) {
-                console.error(`Furigana migration failed for ${child.id}:`, e);
+                console.error(`Auto-repair failed for ${child.id}:`, e);
               }
             }
           });
@@ -456,11 +490,25 @@ function App() {
     setIsSaving(true);
     try {
       const { id, ...saveData } = formData;
+      const lastName = saveData.lastName || '';
+      const firstName = saveData.firstName || '';
+      const fullName = `${lastName} ${firstName}`.trim() || saveData.name || '';
+      const nameFurigana = `${saveData.lastNameFurigana || ''} ${saveData.firstNameFurigana || ''}`.trim() || saveData.nameFurigana || '';
+      const serviceType = saveData.serviceType || calculateServiceType(saveData.birthDate, saveData.schoolGrade || saveData.schoolName);
+      const isHoukagoDay = serviceType === '放課後等デイサービス';
+
       await updateDoc(doc(db, "children", selectedId), {
         ...saveData,
+        name: fullName,
+        fullName: fullName,
+        nameFurigana: nameFurigana,
+        nameKana: nameFurigana,
+        serviceType: serviceType,
+        serviceCategory: serviceType,
+        isHoukagoDay: isHoukagoDay,
         updatedAt: serverTimestamp()
       });
-      const childName = saveData.lastName ? `${saveData.lastName} ${saveData.firstName}` : saveData.name || '未設定';
+      const childName = fullName || '未設定';
       await writeLog("情報更新", `${childName}君の情報（詳細）を更新しました`, saveData.staffInCharge);
       showToast("内容を保存しました");
       setIsEditing(false);
@@ -482,12 +530,24 @@ function App() {
     if (!lastName) return;
 
     const newId = `child_${Date.now()}`;
+    const fullName = `${lastName} ${firstName}`.trim();
+    const nameFurigana = `${lastNameFurigana} ${firstNameFurigana}`.trim();
+    const serviceType = calculateServiceType('', school);
+    const isHoukagoDay = serviceType === '放課後等デイサービス';
+
     const newChild = {
       lastName,
       firstName,
       lastNameFurigana,
       firstNameFurigana,
+      name: fullName,
+      fullName: fullName,
+      nameFurigana: nameFurigana,
+      nameKana: nameFurigana,
       schoolName: school,
+      serviceType: serviceType,
+      serviceCategory: serviceType,
+      isHoukagoDay: isHoukagoDay,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     };
@@ -495,7 +555,7 @@ function App() {
     try {
       await setDoc(doc(db, "children", newId), newChild);
       const operatorName = newChild.staffInCharge || auth.currentUser?.email || "未設定の担当者";
-      await writeLog("新規登録", `${newChild.lastName} ${newChild.firstName}君を新規登録しました`, operatorName);
+      await writeLog("新規登録", `${fullName}君を新規登録しました`, operatorName);
       setIsModalOpen(false);
       setSelectedId(newId);
       showToast("新しく児童を登録しました");
@@ -1383,7 +1443,20 @@ function App() {
                     </span>
                     {child.archived && <span className="text-[9px] bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded font-black shrink-0">アーカイブ</span>}
                   </div>
-                  <div className="text-[10px] text-slate-400 truncate opacity-80">{child.schoolName || ''} {child.schoolGrade || ''}</div>
+                  <div className="text-[10px] text-slate-400 truncate opacity-80 flex items-center gap-1.5">
+                    <span>{child.schoolName || ''} {child.schoolGrade || ''}</span>
+                    {(() => {
+                      const sType = child.serviceType || calculateServiceType(child.birthDate, child.schoolGrade || child.schoolName);
+                      return (
+                        <span className={cn(
+                          "px-1.5 py-0.5 rounded text-[8px] font-black shrink-0",
+                          sType === '放課後等デイサービス' ? "bg-amber-100 text-amber-700" : "bg-teal-100 text-teal-700"
+                        )}>
+                          {sType === '放課後等デイサービス' ? '放デイ' : '児発'}
+                        </span>
+                      );
+                    })()}
+                  </div>
                   {(() => {
                     const offs = Array.isArray(child.offices) ? child.offices : Array.isArray(child.tags) ? child.tags : [];
                     return offs.length > 0 && (
@@ -1615,6 +1688,29 @@ function App() {
                        ) : (
                          <span>{formData.gender === 'male' ? '男性' : formData.gender === 'female' ? '女性' : 'その他'}</span>
                        )}
+                    </div>
+                    <div className={cn(
+                      "flex items-center gap-2 px-3 py-2 bg-white rounded-xl shadow-sm border",
+                      (formData.serviceType || calculateServiceType(formData.birthDate, formData.schoolGrade)) === '放課後等デイサービス'
+                        ? "border-amber-200/80 text-amber-800"
+                        : "border-teal-200/80 text-teal-800",
+                      isEditing && "bg-slate-50 border-amber-300"
+                    )}>
+                      <Sparkles className="w-4 h-4 text-amber-500" />
+                      {isEditing ? (
+                        <select 
+                          value={formData.serviceType || calculateServiceType(formData.birthDate, formData.schoolGrade)} 
+                          onChange={e => handleChange('serviceType', e.target.value)} 
+                          className="bg-transparent border-none p-0 focus:ring-0 text-xs font-bold pr-6 cursor-pointer text-slate-700"
+                        >
+                          <option value="放課後等デイサービス">放課後等デイサービス (就学児)</option>
+                          <option value="児童発達支援">児童発達支援 (未就学児)</option>
+                        </select>
+                      ) : (
+                        <span className="font-bold text-xs">
+                          {formData.serviceType || calculateServiceType(formData.birthDate, formData.schoolGrade)}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>

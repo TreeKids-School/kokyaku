@@ -3,7 +3,7 @@
     "rules": "firestore.rules"
   },
   "hosting": {
-    "site": "kokyakux",
+    "site": "test-kokyaku-6d688",
     "public": "dist",
     "ignore": [
       "firebase.json",

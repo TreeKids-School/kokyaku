@@ -435,6 +435,11 @@ function App() {
     return [...officeSet].sort((a, b) => a.localeCompare(b, 'ja'));
   }, [children]);
 
+  const availableOffices = useMemo(() => {
+    const officeSet = new Set([...masterOffices, ...allOffices, 'ホーム', 'サーチ']);
+    return [...officeSet].filter(Boolean).sort((a, b) => a.localeCompare(b, 'ja'));
+  }, [masterOffices, allOffices]);
+
   const filteredChildren = useMemo(() => {
     let list = children.filter(c => {
       // showArchivedがtrueのときはアーカイブ済みのみ表示、falseのときは未アーカイブのみ表示
@@ -1563,28 +1568,58 @@ function App() {
                 </div>
                 <div className="flex-1 text-center md:text-left">
                   {/* Offices above name */}
-                  <div className="flex flex-wrap justify-center md:justify-start gap-1.5 mb-3">
-                    {(Array.isArray(formData.offices) ? formData.offices : Array.isArray(formData.tags) ? formData.tags : []).map(office => (
-                      <span key={office} className="px-2 py-0.5 bg-brand-50 text-brand-600 rounded-lg text-[9px] font-black uppercase tracking-wider border border-brand-100 flex items-center gap-1">
-                        {office}
-                        {isEditing && (
-                          <button onClick={() => removeOffice(office)} className="hover:text-red-500 transition-colors">
-                            <X className="w-2 h-2" />
-                          </button>
-                        )}
-                      </span>
-                    ))}
-                    {isEditing && masterOffices.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {masterOffices.filter(o => !(Array.isArray(formData.offices) ? formData.offices : Array.isArray(formData.tags) ? formData.tags : []).includes(o)).map(office => (
+                  <div className="flex flex-col gap-2 mb-3">
+                    <div className="flex flex-wrap items-center justify-center md:justify-start gap-1.5">
+                      {(Array.isArray(formData.offices) ? formData.offices : Array.isArray(formData.tags) ? formData.tags : []).map(office => (
+                        <span key={office} className="px-2.5 py-1 bg-brand-50 text-brand-600 rounded-xl text-[10px] font-black uppercase tracking-wider border border-brand-100 flex items-center gap-1.5 shadow-sm">
+                          {office}
+                          {isEditing && (
+                            <button onClick={() => removeOffice(office)} className="hover:text-red-500 transition-colors p-0.5" title="削除">
+                              <X className="w-2.5 h-2.5" />
+                            </button>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+
+                    {isEditing && (
+                      <div className="flex flex-col gap-2 p-3 bg-slate-50/80 rounded-2xl border border-slate-100 mt-1">
+                        <div className="flex items-center gap-1.5 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                          <Tag className="w-3 h-3 text-brand-500" />
+                          <span>事業所タグの選択・追加</span>
+                        </div>
+
+                        {/* Available candidate buttons */}
+                        <div className="flex flex-wrap gap-1">
+                          {availableOffices.filter(o => !(Array.isArray(formData.offices) ? formData.offices : Array.isArray(formData.tags) ? formData.tags : []).includes(o)).map(office => (
+                            <button
+                              key={office}
+                              onClick={() => handleChange('offices', [...(Array.isArray(formData.offices) ? formData.offices : Array.isArray(formData.tags) ? formData.tags : []), office])}
+                              className="px-2.5 py-1 bg-white border border-slate-200 text-slate-600 hover:text-brand-600 hover:border-brand-300 rounded-xl text-[10px] font-bold transition-all shadow-sm active:scale-95 flex items-center gap-1"
+                            >
+                              <span className="text-brand-500 font-black">+</span> {office}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Custom tag input */}
+                        <div className="flex items-center gap-2 mt-1">
+                          <input
+                            type="text"
+                            value={officeInput}
+                            onChange={e => setOfficeInput(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addOffice(); } }}
+                            placeholder="新しいタグ名を入力..."
+                            className="text-xs font-bold px-3 py-1.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/10 flex-1 max-w-xs"
+                          />
                           <button
-                            key={office}
-                            onClick={() => handleChange('offices', [...(Array.isArray(formData.offices) ? formData.offices : Array.isArray(formData.tags) ? formData.tags : []), office])}
-                            className="px-2 py-0.5 bg-white border border-slate-200 text-slate-400 rounded-lg text-[9px] font-bold hover:border-brand-300 hover:text-brand-500 transition-all"
+                            type="button"
+                            onClick={addOffice}
+                            className="px-3 py-1.5 bg-brand-500 text-white rounded-xl text-xs font-bold hover:bg-brand-600 transition-colors shadow-sm active:scale-95"
                           >
-                            + {office}
+                            + 追加
                           </button>
-                        ))}
+                        </div>
                       </div>
                     )}
                   </div>
